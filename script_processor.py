@@ -1,152 +1,115 @@
-import nltk
-from nltk.tokenize import sent_tokenize
 import re
-import os
-import google.generativeai as genai
-import textwrap
-from dotenv import load_dotenv # Import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Download necessary NLTK data (only run this once or put it in your app's startup)
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    print("NLTK 'punkt' tokenizer not found. Attempting to download...")
-    try:
-        nltk.download('punkt')
-        print("NLTK 'punkt' tokenizer downloaded successfully.")
-    except Exception as e:
-        print(f"Error downloading NLTK 'punkt' tokenizer: {e}")
-        print("Please try downloading it manually by running 'python -c \"import nltk; nltk.download(\'punkt\')\"' in your terminal.")
-        raise RuntimeError("Failed to download NLTK 'punkt' tokenizer. Please check your internet connection or try manual download.")
-
-# Configure Gemini API
-API_KEY = os.getenv("GOOGLE_API_KEY")
-if API_KEY:
-    genai.configure(api_key=API_KEY)
-else:
-    print("WARNING: GOOGLE_API_KEY environment variable not set. Gemini features will be unavailable.")
-    print("Please ensure you have a .env file with GOOGLE_API_KEY='YOUR_KEY' or set it as a system environment variable.")
-
 
 class ScriptProcessor:
     def __init__(self):
-        self.model = None
-        if API_KEY: # Only try to initialize model if API_KEY was found
-            try:
-                self.model = genai.GenerativeModel('gemini-pro')
-                # A quick test call to check API key and connectivity (optional, can add more robust check)
-                # For example: self.model.generate_content("hello").text
-            except Exception as e:
-                print(f"Error initializing Gemini model: {e}")
-                self.model = None # Set to None if initialization fails
+        # Any initialization for your script processor can go here.
+        # For now, it might be empty if no state needs to be managed.
+        pass
 
-    def split_script_into_scenes(self, script_text: str) -> list[str]:
+    def process_script(self, raw_script: str) -> list:
         """
-        Splits a raw script text into a list of individual scene texts.
-        This version uses a combination of paragraph breaks and basic sentence
-        analysis to identify potential scene changes.
+        Processes a raw script string into a list of individual scene texts.
+        Each scene is typically separated by a specific delimiter (e.g., "Scene X:").
         """
-        if not script_text or not script_text.strip():
+        if not raw_script.strip():
+            print("Warning: Received empty or whitespace-only script. Returning empty list.")
             return []
 
-        # Normalize line endings and remove excessive blank lines
-        script_text = script_text.replace('\r\n', '\n').replace('\r', '\n')
-        script_text = re.sub(r'\n{2,}', '\n\n', script_text).strip()
+        # Split by "Scene X:" or "Scene X:" where X is a number
+        # re.split will include empty strings at the beginning if the pattern is at the start.
+        # We also want to capture the scene title if available.
+        # Let's refine the splitting to better handle various formats.
 
-        # Initial split by double newlines (paragraphs)
-        paragraphs = [p.strip() for p in script_text.split('\n\n') if p.strip()]
+        # New strategy: Split by lines, then group lines into scenes.
+        # Or, split by known scene markers and then clean.
+        # The previous `re.split(r'Scene \d+:', raw_script, flags=re.IGNORECASE)` is good,
+        # but let's ensure leading empty strings are handled robustly.
 
-        scenes = []
-        current_scene_paragraphs = []
+        scenes_raw = re.split(r'(Scene\s*\d+\s*[:.]\s*)', raw_script, flags=re.IGNORECASE)
+        # The split will return: ['', 'Scene 1: ', 'Text for scene 1', 'Scene 2: ', 'Text for scene 2', ...]
+        # We need to pair them up or just take the text parts.
 
-        for paragraph in paragraphs:
-            is_scene_indicator = re.match(r'^(INT\.|EXT\.|SCENE\s+\d+|CUT\s+TO:|FADE\s+IN\.|FADE\s+OUT\.|[A-Z\s]+:)', paragraph, re.IGNORECASE)
+        processed_scenes = []
+        current_scene_text = ""
 
-            if is_scene_indicator and current_scene_paragraphs:
-                scenes.append("\n\n".join(current_scene_paragraphs))
-                current_scene_paragraphs = [paragraph]
-            elif len(sent_tokenize(paragraph)) <= 2 and len(paragraph.split()) < 15 and current_scene_paragraphs:
-                current_scene_paragraphs.append(paragraph)
+        # Remove the first element if it's empty due to split at beginning of string
+        if scenes_raw and not scenes_raw[0].strip():
+            scenes_raw = scenes_raw[1:]
+
+        # Iterate through the split parts to reconstruct scenes
+        for part in scenes_raw:
+            if re.match(r'Scene\s*\d+\s*[:.]\s*', part, flags=re.IGNORECASE):
+                # If we encounter a new scene marker, and we have accumulated text for the previous scene,
+                # add it to our list before starting a new one.
+                if current_scene_text.strip():
+                    processed_scenes.append(current_scene_text.strip())
+                current_scene_text = "" # Reset for the new scene
             else:
-                current_scene_paragraphs.append(paragraph)
+                # Accumulate text for the current scene
+                current_scene_text += part.strip() + " "
 
-        if current_scene_paragraphs:
-            scenes.append("\n\n".join(current_scene_paragraphs))
+        # Add the last accumulated scene if any
+        if current_scene_text.strip():
+            processed_scenes.append(current_scene_text.strip())
 
-        final_scenes = []
-        temp_scene = ""
-        for i, scene in enumerate(scenes):
-            sentences = sent_tokenize(scene)
-            if len(sentences) < 3 and i > 0 and len(scene.split()) < 50:
-                if temp_scene:
-                    temp_scene += "\n\n" + scene
-                else:
-                    temp_scene = scene
-            else:
-                if temp_scene:
-                    final_scenes.append(temp_scene)
-                    temp_scene = ""
-                final_scenes.append(scene)
-
-        if temp_scene:
-            final_scenes.append(temp_scene)
-
+        # Final cleaning (remove multiple spaces, newlines, etc.)
         cleaned_scenes = []
-        for scene in final_scenes:
-            if len(sent_tokenize(scene)) == 1 and len(scene.split()) < 10 and not re.match(r'^(INT\.|EXT\.|SCENE\s+\d+|CUT\s+TO:|FADE\s+IN\.|FADE\s+OUT\.|[A-Z\s]+:)', scene.strip(), re.IGNORECASE):
-                pass
-            cleaned_scenes.append(scene)
+        for scene in processed_scenes:
+            # Replace multiple newlines/spaces with a single space
+            cleaned_scene = re.sub(r'\s+', ' ', scene).strip()
+            # Remove any specific formatting characters from markdown that might interfere with TTS/Image prompts
+            cleaned_scene = re.sub(r'[\*_`#]', '', cleaned_scene) # Example: remove markdown bold/italic/header chars
+            if cleaned_scene: # Only add non-empty scenes
+                cleaned_scenes.append(cleaned_scene)
 
         return cleaned_scenes
 
-    def analyze_scene_with_gemini(self, scene_text: str) -> dict:
-        """
-        Uses Gemini to analyze a single scene and extract a title/summary and potential keywords.
-        Returns a dictionary with 'title', 'summary', and 'keywords'.
-        """
-        if not self.model:
-            return {"title": "AI Analysis Unavailable", "summary": "Gemini API not configured or failed to initialize.", "keywords": []}
+# Example of how to use (for testing this module independently)
+if __name__ == "__main__":
+    test_script_1 = """
+    Scene 1: Introduction.
+    The sun rises over a serene, misty lake, casting golden hues across the water. A lone fishing boat glides gently.
 
-        prompt = textwrap.dedent(f"""
-        Analyze the following scene text. Provide:
-        1. A concise title for the scene (max 10 words).
-        2. A brief summary of the scene (1-2 sentences).
-        3. 3-5 keywords or visual cues that represent the core elements or mood of the scene.
+    Scene 2: Problem.
+    Suddenly, dark clouds gather, and a fierce storm begins. Waves crash violently against the boat, threatening to capsize it.
 
-        Format your response clearly as follows:
-        Title: [Your Scene Title]
-        Summary: [Your Scene Summary]
-        Keywords: [keyword1], [keyword2], [keyword3], ...
+    Scene 3: Solution.
+    A lighthouse beam cuts through the gloom, guiding the struggling vessel to safety. The storm slowly dissipates.
 
-        Scene Text:
-        ---
-        {scene_text}
-        ---
-        """)
+    Scene 4: Conclusion.
+    The boat reaches the shore as the sun breaks through the clouds, symbolizing hope and resilience.
+    """
 
-        try:
-            response = self.model.generate_content(prompt)
-            gemini_output = response.text.strip()
+    test_script_2 = """
+    First Scene: Welcome to our adventure.
+    It's a beautiful day, perfect for exploring new horizons.
 
-            title = "N/A"
-            summary = "N/A"
-            keywords = []
+    Second Part: The journey begins.
+    We set off on an exciting path, full of discovery.
+    """
 
-            lines = gemini_output.split('\n')
-            for line in lines:
-                if line.lower().startswith("title:"):
-                    title = line[len("Title:"):].strip()
-                elif line.lower().startswith("summary:"):
-                    summary = line[len("Summary:"):].strip()
-                elif line.lower().startswith("keywords:"):
-                    keywords_str = line[len("Keywords:"):].strip()
-                    keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
+    processor = ScriptProcessor()
 
-            return {"title": title, "summary": summary, "keywords": keywords}
+    print("--- Processing Test Script 1 ---")
+    scenes_1 = processor.process_script(test_script_1)
+    if scenes_1:
+        for i, scene in enumerate(scenes_1):
+            print(f"Scene {i+1} (Length: {len(scene)}):")
+            print(scene)
+            print("-" * 30)
+    else:
+        print("No scenes extracted from test_script_1.")
 
-        except Exception as e:
-            print(f"Error analyzing scene with Gemini: {e}")
-            return {"title": "AI Error", "summary": f"Could not analyze scene: {e}", "keywords": []}
+    print("\n--- Processing Test Script 2 ---")
+    scenes_2 = processor.process_script(test_script_2)
+    if scenes_2:
+        for i, scene in enumerate(scenes_2):
+            print(f"Scene {i+1} (Length: {len(scene)}):")
+            print(scene)
+            print("-" * 30)
+    else:
+        print("No scenes extracted from test_script_2.")
+
+    print("\n--- Processing Empty Script ---")
+    empty_scenes = processor.process_script("")
+    print(f"Empty script result: {empty_scenes}")
