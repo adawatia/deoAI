@@ -1,189 +1,163 @@
-import sys
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QPushButton, QLabel, QComboBox, QScrollArea, QFrame,
-    QLineEdit, QFileDialog, QMessageBox
-)
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QIcon
+import os
+import shutil
+import time # For basic timing/progress
+from datetime import datetime # To create unique filenames
 
-# Import other modules as we build them
-# from script_processor import ScriptProcessor
-# from voiceover_generator import VoiceoverGenerator
-# from visual_generator import VisualsGenerator
-# from video_assembler import VideoAssembler
+# Import your custom modules
+from script_processor import ScriptProcessor
+from voiceover_generator import VoiceoverGenerator
+from visual_generator import VisualGenerator
+from video_assembler import VideoAssembler
 
-class FacelessVideoApp(QMainWindow):
+# --- Configuration ---
+# Output directories for generated assets
+GENERATED_AUDIO_DIR = "generated_audio"
+GENERATED_IMAGES_DIR = "generated_images"
+FINAL_VIDEOS_DIR = "final_videos"
+TEMP_DIR = "temp_assets" # For temporary files during processing, if needed
+
+# Ensure output directories exist
+os.makedirs(GENERATED_AUDIO_DIR, exist_ok=True)
+os.makedirs(GENERATED_IMAGES_DIR, exist_ok=True)
+os.makedirs(FINAL_VIDEOS_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True) # Create temp dir
+
+
+# --- Main Application Logic ---
+class FacelessVideoApp:
     def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Faceless Video Creator")
-        self.setGeometry(100, 100, 1200, 800) # Initial window size
+        print("Initializing Faceless Video App components...")
+        self.script_processor = ScriptProcessor()
+        self.voiceover_generator = VoiceoverGenerator(output_dir=GENERATED_AUDIO_DIR)
+        self.visual_generator = VisualGenerator(output_dir=GENERATED_IMAGES_DIR)
+        self.video_assembler = VideoAssembler(output_dir=FINAL_VIDEOS_DIR)
+        print("Components initialized.")
 
-        self.init_ui()
+    def generate_video_from_script(self, raw_script: str, background_music_path: str = None):
+        """
+        Orchestrates the entire video generation process from a raw script.
+        """
+        print("\n--- Starting Video Generation Process ---")
+        start_time = time.time()
 
-    def init_ui(self):
-        # Central Widget and Layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
+        # 1. Process the script into scenes
+        print("1. Processing script into scenes...")
+        processed_scenes = self.script_processor.process_script(raw_script)
+        if not processed_scenes:
+            print("No scenes processed. Aborting video generation.")
+            return None
+        print(f"Script processed into {len(processed_scenes)} scenes.")
 
-        # --- Left Panel (Script Input and Controls) ---
-        left_panel = QFrame()
-        left_panel.setFrameShape(QFrame.StyledPanel)
-        left_panel.setContentsMargins(10, 10, 10, 10)
-        left_panel_layout = QVBoxLayout(left_panel)
-        left_panel_layout.setAlignment(Qt.AlignTop) # Align content to the top
+        scene_assets = [] # To store paths of generated audio and images for each scene
 
-        # Script Input
-        script_label = QLabel("Enter your script:")
-        left_panel_layout.addWidget(script_label)
-        self.script_input = QTextEdit()
-        self.script_input.setPlaceholderText("Paste or type your script here...")
-        left_panel_layout.addWidget(self.script_input)
+        # 2. Generate voiceovers and visuals for each scene
+        print("2. Generating voiceovers and visuals for each scene...")
+        for i, scene_text in enumerate(processed_scenes):
+            print(f"\n  -- Processing Scene {i+1}/{len(processed_scenes)} --")
+            scene_start_time = time.time()
 
-        # Action Buttons
-        button_layout = QHBoxLayout()
-        self.split_scenes_btn = QPushButton("Split Scenes")
-        self.split_scenes_btn.clicked.connect(self.split_scenes)
-        button_layout.addWidget(self.split_scenes_btn)
+            # Generate Voiceover
+            audio_path = self.voiceover_generator.generate_voiceover_for_scene(scene_text, i)
+            if not audio_path:
+                print(f"  Warning: Voiceover failed for scene {i+1}. Using fallback/silent audio.")
+                # You might want to create a silent audio here as a fallback if not already handled
+                # by voiceover_generator. This is crucial for MoviePy not to crash.
+                from pydub import AudioSegment
+                silent_audio = AudioSegment.silent(duration=2000) # Default silent duration
+                fallback_audio_path = os.path.join(TEMP_DIR, f"silent_fallback_{i}.wav")
+                silent_audio.export(fallback_audio_path, format="wav")
+                audio_path = fallback_audio_path
+            print(f"  Voiceover for scene {i+1} saved to: {audio_path}")
 
-        self.generate_voiceover_btn = QPushButton("Generate Voiceover")
-        self.generate_voiceover_btn.clicked.connect(self.generate_voiceover)
-        button_layout.addWidget(self.generate_voiceover_btn)
+            # Generate Visual
+            image_path = self.visual_generator.generate_visual_for_scene(scene_text, i)
+            if not image_path:
+                print(f"  Warning: Visual generation failed for scene {i+1}. Using a black placeholder image.")
+                # Create a black placeholder image if visual generation fails
+                from PIL import Image
+                from pydub import AudioSegment # To get audio duration for image placeholder
+                
+                # Get audio duration to make image placeholder match
+                audio_for_duration = AudioSegment.from_wav(audio_path)
+                placeholder_duration_ms = audio_for_duration.duration_seconds * 1000
 
-        self.generate_visuals_btn = QPushButton("Generate Visuals")
-        self.generate_visuals_btn.clicked.connect(self.generate_visuals)
-        button_layout.addWidget(self.generate_visuals_btn)
+                placeholder_image = Image.new('RGB', (1920, 1080), color = 'black') # Standard HD resolution
+                fallback_image_path = os.path.join(TEMP_DIR, f"black_placeholder_{i}.png")
+                placeholder_image.save(fallback_image_path)
+                image_path = fallback_image_path
+            print(f"  Visual for scene {i+1} saved to: {image_path}")
 
-        self.generate_video_btn = QPushButton("Generate Video")
-        self.generate_video_btn.clicked.connect(self.generate_video)
-        button_layout.addWidget(self.generate_video_btn)
-        left_panel_layout.addLayout(button_layout)
+            scene_assets.append({
+                "image_path": image_path,
+                "audio_path": audio_path
+            })
+            print(f"  Scene {i+1} processing finished in {time.time() - scene_start_time:.2f} seconds.")
 
-        # Voiceover Options (placeholders for now)
-        voice_options_label = QLabel("Voiceover Options:")
-        left_panel_layout.addWidget(voice_options_label)
-        self.voice_style_combo = QComboBox()
-        self.voice_style_combo.addItem("Default Voice (Chatterbox)")
-        self.voice_style_combo.addItem("Calm") # Example
-        self.voice_style_combo.addItem("Excited") # Example
-        self.voice_style_combo.addItem("Narration") # Example
-        left_panel_layout.addWidget(self.voice_style_combo)
+        # 3. Assemble the final video
+        print("\n3. Assembling the final video...")
+        # Generate a unique filename for the output video
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_video_filename = f"faceless_video_{timestamp}.mp4"
 
-        self.language_combo = QComboBox()
-        self.language_combo.addItem("English")
-        self.language_combo.addItem("Hindi (Example)") # Will depend on Chatterbox capabilities
-        left_panel_layout.addWidget(self.language_combo)
+        final_video_path = self.video_assembler.assemble_video(
+            scene_assets,
+            background_music_path=background_music_path,
+            output_filename=output_video_filename
+        )
 
-        # Branding Options (placeholder for now)
-        branding_label = QLabel("Branding:")
-        left_panel_layout.addWidget(branding_label)
-        self.logo_path_input = QLineEdit()
-        self.logo_path_input.setPlaceholderText("Path to brand logo (optional)")
-        self.logo_path_btn = QPushButton("Browse...")
-        self.logo_path_btn.clicked.connect(self.browse_logo)
-        logo_layout = QHBoxLayout()
-        logo_layout.addWidget(self.logo_path_input)
-        logo_layout.addWidget(self.logo_path_btn)
-        left_panel_layout.addLayout(logo_layout)
+        if final_video_path:
+            print(f"\n--- Video Generation Complete! ---")
+            print(f"Final video saved to: {os.path.abspath(final_video_path)}")
+        else:
+            print("\n--- Video Generation Failed ---")
 
-        self.watermark_checkbox = QPushButton("Add Watermark (Future)")
-        # self.watermark_checkbox.setChecked(False)
-        left_panel_layout.addWidget(self.watermark_checkbox)
+        end_time = time.time()
+        print(f"Total processing time: {end_time - start_time:.2f} seconds.")
 
-        # Add a stretch to push content to the top
-        left_panel_layout.addStretch(1)
-        main_layout.addWidget(left_panel, 2) # Left panel takes 2 parts of width
+        # Optional: Clean up temporary files (uncomment if you want to remove temp_assets)
+        # print("Cleaning up temporary assets...")
+        # shutil.rmtree(TEMP_DIR)
+        # print("Temporary assets removed.")
 
-        # --- Right Panel (Scene Previews and Video Preview) ---
-        right_panel = QFrame()
-        right_panel.setFrameShape(QFrame.StyledPanel)
-        right_panel_layout = QVBoxLayout(right_panel)
+        return final_video_path
 
-        # Scene Preview Area
-        scene_preview_label = QLabel("Generated Scenes:")
-        right_panel_layout.addWidget(scene_preview_label)
-        self.scene_scroll_area = QScrollArea()
-        self.scene_scroll_area.setWidgetResizable(True)
-        self.scene_container = QWidget()
-        self.scene_layout = QVBoxLayout(self.scene_container)
-        self.scene_container.setLayout(self.scene_layout)
-        self.scene_scroll_area.setWidget(self.scene_container)
-        right_panel_layout.addWidget(self.scene_scroll_area, 3) # Takes 3 parts of height
-
-        # Video Preview Area (placeholder for now)
-        video_preview_label = QLabel("Video Preview:")
-        right_panel_layout.addWidget(video_preview_label)
-        self.video_preview_widget = QLabel("Video will appear here (or a player widget)")
-        self.video_preview_widget.setAlignment(Qt.AlignCenter)
-        self.video_preview_widget.setMinimumSize(480, 270) # Standard 16:9 aspect ratio
-        self.video_preview_widget.setStyleSheet("background-color: black; color: white;")
-        right_panel_layout.addWidget(self.video_preview_widget, 2) # Takes 2 parts of height
-
-        main_layout.addWidget(right_panel, 3) # Right panel takes 3 parts of width
-
-    # Placeholder methods for functionality
-    def split_scenes(self):
-        script_text = self.script_input.toPlainText()
-        if not script_text.strip():
-            QMessageBox.warning(self, "Input Error", "Please enter a script to split into scenes.")
-            return
-
-        # For now, a very basic split by paragraphs.
-        # This will be replaced by more sophisticated NLP later.
-        scenes = [s.strip() for s in script_text.split('\n\n') if s.strip()]
-
-        # Clear existing scenes
-        for i in reversed(range(self.scene_layout.count())):
-            widget = self.scene_layout.itemAt(i).widget()
-            if widget:
-                widget.deleteLater()
-
-        if not scenes:
-            self.scene_layout.addWidget(QLabel("No scenes generated. Try a longer script or different formatting."))
-            return
-
-        for i, scene_text in enumerate(scenes):
-            scene_frame = QFrame()
-            scene_frame.setFrameShape(QFrame.Box)
-            scene_frame.setLineWidth(1)
-            scene_layout = QVBoxLayout(scene_frame)
-
-            scene_title = QLabel(f"<b>Scene {i+1}:</b>")
-            scene_text_label = QLabel(scene_text)
-            scene_text_label.setWordWrap(True)
-
-            scene_layout.addWidget(scene_title)
-            scene_layout.addWidget(scene_text_label)
-            # Add placeholders for voiceover and visual options per scene later
-            # For example: a play button for voiceover, an image thumbnail
-
-            self.scene_layout.addWidget(scene_frame)
-        QMessageBox.information(self, "Scenes Split", f"Script split into {len(scenes)} scenes.")
-
-
-    def generate_voiceover(self):
-        QMessageBox.information(self, "Feature Coming Soon", "Voiceover generation functionality will be implemented here.")
-        # This will involve calling Chatterbox-TTS for each scene.
-
-    def generate_visuals(self):
-        QMessageBox.information(self, "Feature Coming Soon", "Visuals generation functionality will be implemented here.")
-        # This will involve fetching stock media or using AI generation.
-
-    def generate_video(self):
-        QMessageBox.information(self, "Feature Coming Soon", "Video assembly functionality will be implemented here.")
-        # This will combine generated audio and visuals using MoviePy.
-
-    def browse_logo(self):
-        file_dialog = QFileDialog()
-        file_path, _ = file_dialog.getOpenFileName(self, "Select Brand Logo", "", "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)")
-        if file_path:
-            self.logo_path_input.setText(file_path)
-            QMessageBox.information(self, "Logo Selected", f"Logo path set to: {file_path}")
-
-
+# --- Main Execution Block ---
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = FacelessVideoApp()
-    window.show()
-    sys.exit(app.exec())
+    app = FacelessVideoApp()
+
+    # Define a sample script
+    sample_script = """
+    Scene 1: Introduction.
+    The sun rises over a serene, misty lake, casting golden hues across the water. A lone fishing boat glides gently.
+
+    Scene 2: Problem.
+    Suddenly, dark clouds gather, and a fierce storm begins. Waves crash violently against the boat, threatening to capsize it.
+
+    Scene 3: Solution.
+    A lighthouse beam cuts through the gloom, guiding the struggling vessel to safety. The storm slowly dissipates.
+
+    Scene 4: Conclusion.
+    The boat reaches the shore as the sun breaks through the clouds, symbolizing hope and resilience.
+    """
+
+    # Optional: Path to a background music file.
+    # Make sure you have an MP3 file, e.g., 'background_music.mp3' in your project root.
+    # You can download royalty-free music for testing.
+    # Example: Create a dummy one for initial testing if you don't have.
+    # from pydub import AudioSegment
+    # if not os.path.exists("sample_background_music.mp3"):
+    #     AudioSegment.silent(duration=30000).export("sample_background_music.mp3", format="mp3")
+    background_music_file = None # Set to "sample_background_music.mp3" if you generate one
+
+    # Check if generators are available before attempting to run
+    if (app.voiceover_generator.get_chatterbox_availability() and
+            app.visual_generator.get_visual_generator_availability()):
+        print("\nAll generators available. Running video generation...")
+        final_video = app.generate_video_from_script(sample_script, background_music_path=background_music_file)
+        if final_video:
+            print(f"\nFinal video available at: {final_video}")
+            print("\nRemember to check the 'generated_audio', 'generated_images', and 'final_videos' folders.")
+    else:
+        print("\nSome generators are not available. Please check the logs above for missing libraries or model issues.")
+        print("Ensure 'chatterbox-tts', 'torchaudio', 'diffusers', 'transformers', 'accelerate', 'moviepy',")
+        print("and their dependencies (including PyTorch/CUDA/FFmpeg) are correctly installed.")
