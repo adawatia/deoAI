@@ -107,3 +107,4 @@ uritemplate==4.2.0
 urllib3==2.5.0
 virtualenv==20.31.2
 zipp==3.23.0
+streamlit

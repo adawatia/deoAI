@@ -207,7 +207,7 @@ marimo/_lsp/
 __marimo__/
 
 # Files
-final_videos
-generated_audio
-generated_images
-temp_assets
+/generated_audio/
+/generated_images/
+/final_videos/
+/temp_assets/
