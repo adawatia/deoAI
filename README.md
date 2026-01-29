@@ -1,5 +1,9 @@
 # 🎭 DeoAI: Faceless Video Generation
 
+
+> **Note:** This project is now archived and is no longer being actively maintained. The code is available for educational purposes, but no further updates or support will be provided.
+
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Built with PyTorch](https://img.shields.io/badge/Built%20with-PyTorch-EE4C2C.svg?logo=pytorch)](https://pytorch.org/)
